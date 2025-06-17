@@ -3,11 +3,9 @@ import uuid
 import time
 import threading
 import logging
-import json
 import re
 import subprocess
 import shlex
-import tempfile
 from datetime import datetime
 from flask import Flask, render_template, request, Response, jsonify
 from flask_limiter import Limiter
@@ -64,26 +62,30 @@ download_status = {}
 last_progress = {}
 transcoding_status = {}
 
-# Security helper
+# --- Security helper: ensure file operations are safe ---
 def is_safe_path(path):
-    """Check if path is within the temp directory"""
+    """Check if the given path is within the temp directory to prevent directory traversal attacks."""
     abs_temp = os.path.abspath(TEMP_DIR)
     abs_path = os.path.abspath(path)
     return os.path.commonpath([abs_temp]) == os.path.commonpath([abs_temp, abs_path])
 
+# --- Utility: Remove ANSI color codes from output ---
 def strip_ansi_codes(text):
-    """Remove ANSI color codes from a string."""
+    """Remove ANSI color codes from a string for clean user-facing output."""
     if not isinstance(text, str):
         return text
     return re.sub(r'\x1b\[[0-9;]*m', '', text)
 
+# --- Flask context: inject current time for templates ---
 @app.context_processor
 def inject_now():
+    """Inject the current datetime into Jinja templates as 'now'."""
     return {'now': datetime.now()}
 
+# --- Download progress hook for yt_dlp ---
 def download_hook(d, download_id):
+    """Track and update download progress for a given download_id."""
     if d['status'] == 'downloading':
-        # Remove ANSI color codes from progress string
         progress = strip_ansi_codes(d.get('_percent_str', '0%'))
         speed = strip_ansi_codes(d.get('_speed_str', '?'))
         eta = strip_ansi_codes(d.get('_eta_str', '?'))
@@ -96,29 +98,26 @@ def download_hook(d, download_id):
     elif d['status'] == 'finished':
         last_progress[download_id] = {'status': 'processing'}
 
+# --- Format string selection for yt_dlp ---
 def get_format_string(format_choice, quality):
-    format_map = {
-        'mp4': {
-            'best': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            '720p': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
-            '480p': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best'
-        },
-        'mp3': 'bestaudio/best',
-    }
-    return format_map.get(format_choice, {}).get(quality, format_map.get(format_choice, 'best'))
+    """Return yt_dlp format string for supported formats. Only MP4 and MP3 are allowed."""
+    if format_choice == 'mp4':
+        # Always get best available MP4 video+audio
+        return 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+    elif format_choice == 'mp3':
+        # Download best audio for MP3 conversion
+        return 'bestaudio/best'
+    else:
+        raise ValueError('Only MP4 and MP3 formats are supported.')
 
-# Get ffmpeg cpu-used for webm from environment or default to 4
-FFMPEG_CPU_USED = os.environ.get('FFMPEG_CPU_USED', '4')
-
+# --- Transcoding utility: MP4 to MP3 (or MP3 copy) ---
 def transcode_file(input_path, output_path, target_format):
-    """Transcode a file to the target format using FFmpeg"""
+    """Transcode a file to MP3 using FFmpeg. Only mp4 to mp3 or mp3 to mp3 (copy) allowed."""
     try:
         input_ext = input_path.split('.')[-1].lower()
         output_ext = output_path.split('.')[-1].lower()
-        # Only allow mp4 to mp3
         if input_ext in SUPPORTED_FORMATS['video'] and output_ext in SUPPORTED_FORMATS['audio']:
             cmd = f"ffmpeg -i {shlex.quote(input_path)} -vn -c:a libmp3lame -q:a 2 {shlex.quote(output_path)}"
-        # Audio to audio transcoding (mp3 to mp3, just copy)
         elif input_ext in SUPPORTED_FORMATS['audio'] and output_ext in SUPPORTED_FORMATS['audio']:
             cmd = f"ffmpeg -i {shlex.quote(input_path)} -c:a copy {shlex.quote(output_path)}"
         else:
@@ -142,11 +141,14 @@ def transcode_file(input_path, output_path, target_format):
         logger.error(strip_ansi_codes(f"Transcoding error: {str(e)}"))
         raise
 
+# Max file size for downloads (in MB), configurable via environment variable
+MAX_FILESIZE_MB = int(os.environ.get('MAX_FILESIZE_MB', '2000'))  # Default 2000MB (2GB)
+
+# --- Main download logic: handles download and optional transcoding ---
 def download_video(url, format_choice, quality, download_id):
-    # Only allow mp4, mp3
+    """Download a video as MP4 or MP3. Only MP4 and MP3 are supported. Livestreams are blocked."""
     if format_choice not in ['mp4', 'mp3']:
         raise Exception('Only MP4 and MP3 formats are supported.')
-    # Always download as mp4 for all formats, then transcode if needed
     ydl_format = get_format_string('mp4', quality)
     ydl_opts = {
         'format': ydl_format,
@@ -157,7 +159,7 @@ def download_video(url, format_choice, quality, download_id):
         'restrictfilenames': True,
         'socket_timeout': 30,
         'retries': 3,
-        'max_filesize': 2000 * 1024 * 1024,  # 2GB limit
+        'max_filesize': MAX_FILESIZE_MB * 1024 * 1024,  # Use env-configured max size
         'concurrent_fragment_downloads': 4,
     }
     original_path = None
@@ -165,7 +167,6 @@ def download_video(url, format_choice, quality, download_id):
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            # Block livestreams
             if info.get('is_live') or info.get('was_live'):
                 raise Exception('Livestreams are not supported. Please provide a non-live video URL.')
             title = info.get('title', 'video')
@@ -220,8 +221,9 @@ def download_video(url, format_choice, quality, download_id):
                     pass
         raise
 
+# --- Error message sanitizer ---
 def clean_error_message(msg):
-    """Remove sensitive info and ANSI codes from error messages"""
+    """Remove sensitive info and ANSI codes from error messages for safe API responses."""
     msg = strip_ansi_codes(msg)
     patterns = [
         r"File (.*?) already exists",
@@ -232,13 +234,17 @@ def clean_error_message(msg):
         msg = re.sub(pattern, "[redacted]", msg)
     return msg
 
+# --- Flask route: Home page ---
 @app.route('/', methods=['GET'])
 def index():
+    """Render the main index page."""
     return render_template('index.html')
 
+# --- Flask route: Start a new download ---
 @app.route('/start_download', methods=['POST'])
 @limiter.limit(START_DOWNLOAD_LIMIT)
 def start_download():
+    """API endpoint to start a new download in a background thread."""
     try:
         data = request.get_json()
         url = data.get('url')
@@ -266,8 +272,10 @@ def start_download():
         logger.error(strip_ansi_codes(f"Unexpected error: {str(e)}"))
         return jsonify({'status': 'error', 'message': strip_ansi_codes(str(e))}), 500
 
+# --- Flask route: Get download status/progress ---
 @app.route('/download_status/<download_id>')
 def get_download_status(download_id):
+    """API endpoint to get the current status or progress of a download."""
     progress = last_progress.get(download_id, {'status': 'starting'})
     status = download_status.get(download_id, 'not found')
     transcode_status = transcoding_status.get(download_id, '')
@@ -297,9 +305,11 @@ def get_download_status(download_id):
             response_data['transcode_status'] = strip_ansi_codes(transcode_status)
         return jsonify(response_data)
 
+# --- Flask route: Download the completed file ---
 @app.route('/download_file/<download_id>')
 @limiter.limit(API_DOWNLOAD_LIMIT)
 def download_file(download_id):
+    """API endpoint to stream the completed file to the user and clean up after download."""
     # Check if download exists
     if download_id not in download_status:
         return jsonify({'status': 'error', 'message': 'Invalid download ID'}), 404
@@ -358,8 +368,10 @@ def download_file(download_id):
     )
     return response
 
+# --- Flask route: Cancel a download and clean up ---
 @app.route('/cancel_download/<download_id>')
 def cancel_download(download_id):
+    """API endpoint to cancel a download and remove any associated files/status."""
     if download_id in download_status:
         # Clean up if file exists
         status = download_status[download_id]
@@ -379,8 +391,10 @@ def cancel_download(download_id):
         return jsonify({'status': 'canceled'})
     return jsonify({'status': 'not found'}), 404
 
+# --- Flask error handler: Rate limit exceeded ---
 @app.errorhandler(429)
 def ratelimit_handler(e):
+    """Return a JSON error when the user exceeds the rate limit."""
     return jsonify({
         'status': 'error', 
         'message': strip_ansi_codes('Too many requests. Please try again later.'),
@@ -391,8 +405,9 @@ def ratelimit_handler(e):
         }
     }), 429
 
+# --- Background thread: Periodically clean up old temp files ---
 def cleanup_temp_folder():
-    """Clean up the temp folder every hour, deleting files older than 1 hour"""
+    """Clean up the temp folder every hour, deleting files older than 1 hour."""
     while True:
         try:
             now = time.time()
@@ -424,6 +439,7 @@ def cleanup_temp_folder():
             # Sleep a bit before retrying in case of errors
             time.sleep(60)
 
+# --- App entry point: Start cleanup thread and Flask server ---
 if __name__ == '__main__':
     # Start the cleanup thread
     cleanup_thread = threading.Thread(target=cleanup_temp_folder, daemon=True)
