@@ -1,6 +1,6 @@
 # 🎬 Universal Video Downloader
 
-A simple Flask web application to download videos or audio (MP4/MP3) from YouTube, Vimeo, Twitter, TikTok, and 1000+ sites using yt-dlp and FFmpeg.
+A simple Flask web application to download videos or audio (MP4/MP3) from YouTube, Vimeo, Twitter, TikTok, and 1000+ sites using [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [FFmpeg](https://ffmpeg.org/).
 
 ## ✨ Features
 - 📹 Download videos as MP4 or extract audio as MP3
@@ -13,8 +13,8 @@ A simple Flask web application to download videos or audio (MP4/MP3) from YouTub
 
 ## ⚙️ Requirements
 - 🐍 Python 3.11+
-- 🎵 FFmpeg (installed in Docker image)
-> ⚠️ **Note:** You must provide your own reverse proxy (such as Nginx or Caddy) in front of this application to enable HTTPS and other production security features. This app does not handle HTTPS or advanced security by itself.
+- 🎵 [FFmpeg](https://ffmpeg.org/) (installed in Docker image)
+> ⚠️ **Note:** You must provide your own reverse proxy (such as [Nginx](https://docs.nginx.com/nginx/admin-guide/web-server/reverse-proxy/), [Traefik](https://doc.traefik.io/traefik/), [Caddy](https://caddyserver.com/docs/quick-starts/reverse-proxy), and many more) in front of this application to enable HTTPS and other production security features. This app does not handle HTTPS or advanced security by itself.
 
 ## 🚀 Quick Start (Docker)
 
@@ -76,9 +76,9 @@ Or, if you prefer to build the image yourself, clone the repository and use `doc
    - Go to [http://localhost:5000](http://localhost:5000)
 
 ## 📝 Usage
-- Enter a video URL and select MP4 (video) or MP3 (audio).
-- Click **Download**. The file will be prepared and downloaded automatically.
-- 🧹 Temporary files are deleted after download or after 1 hour.
+1. Enter a video URL and select MP4 (video) or MP3 (audio).
+2. Click **Download**. The file will be prepared and downloaded automatically.
+3. Temporary files are deleted after download or after 1 hour.
 
 ## 🛠️ Development
 - Install dependencies: `pip install -r requirements.txt`
