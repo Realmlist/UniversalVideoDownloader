@@ -89,8 +89,7 @@ Or, if you prefer to build the image yourself, clone the repository and use `doc
 - Only MP4 and MP3 formats are supported.
 - All downloads are processed securely and deleted after transfer.
 - Some sites may restrict downloading of their content.
-- **Generated with DeepSeek because I'm lazy and don't intend to use this in a professional nor production setting.**
-- **I will provide no support on possible issues. Fork or create pull requests instead.**
+- **Generated with DeepSeek because I'm lazy and don't intend to use this in a professional setting.**
 
 ## 📄 License
 MIT
