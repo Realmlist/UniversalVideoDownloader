@@ -11,3 +11,4 @@ temp_downloads/
 *.sqlite3
 *.db
 venv/
+docker-build.sh
