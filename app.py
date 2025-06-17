@@ -71,17 +71,26 @@ def is_safe_path(path):
     abs_path = os.path.abspath(path)
     return os.path.commonpath([abs_temp]) == os.path.commonpath([abs_temp, abs_path])
 
+def strip_ansi_codes(text):
+    """Remove ANSI color codes from a string."""
+    if not isinstance(text, str):
+        return text
+    return re.sub(r'\x1b\[[0-9;]*m', '', text)
+
 @app.context_processor
 def inject_now():
     return {'now': datetime.now()}
 
 def download_hook(d, download_id):
     if d['status'] == 'downloading':
-        progress = d.get('_percent_str', '0%')
+        # Remove ANSI color codes from progress string
+        progress = strip_ansi_codes(d.get('_percent_str', '0%'))
+        speed = strip_ansi_codes(d.get('_speed_str', '?'))
+        eta = strip_ansi_codes(d.get('_eta_str', '?'))
         last_progress[download_id] = {
             'percent': progress,
-            'speed': d.get('_speed_str', '?'),
-            'eta': d.get('_eta_str', '?'),
+            'speed': speed,
+            'eta': eta,
             'status': 'downloading'
         }
     elif d['status'] == 'finished':
@@ -121,14 +130,16 @@ def transcode_file(input_path, output_path, target_format):
             stderr=subprocess.PIPE
         )
         stdout, stderr = process.communicate()
+        stdout = strip_ansi_codes(stdout.decode('utf-8', errors='ignore'))
+        stderr = strip_ansi_codes(stderr.decode('utf-8', errors='ignore'))
         if process.returncode != 0:
-            error_msg = f"Transcoding failed: {stderr.decode('utf-8')}"
+            error_msg = f"Transcoding failed: {stderr}"
             logger.error(error_msg)
             raise Exception(error_msg)
-        logger.info(f"Successfully transcoded {input_path} to {output_path}")
+        logger.info(strip_ansi_codes(f"Successfully transcoded {input_path} to {output_path}"))
         return True
     except Exception as e:
-        logger.error(f"Transcoding error: {str(e)}")
+        logger.error(strip_ansi_codes(f"Transcoding error: {str(e)}"))
         raise
 
 def download_video(url, format_choice, quality, download_id):
@@ -139,7 +150,7 @@ def download_video(url, format_choice, quality, download_id):
     ydl_format = get_format_string('mp4', quality)
     ydl_opts = {
         'format': ydl_format,
-        'quiet': True,
+        'quiet': False,
         'no_warnings': True,
         'progress_hooks': [lambda d: download_hook(d, download_id)],
         'noplaylist': True,
@@ -154,6 +165,9 @@ def download_video(url, format_choice, quality, download_id):
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
+            # Block livestreams
+            if info.get('is_live') or info.get('was_live'):
+                raise Exception('Livestreams are not supported. Please provide a non-live video URL.')
             title = info.get('title', 'video')
             if not title.strip():
                 title = "video"
@@ -175,7 +189,7 @@ def download_video(url, format_choice, quality, download_id):
                 try:
                     os.remove(original_path)
                 except Exception as e:
-                    logger.error(f"Error removing original file: {str(e)}")
+                    logger.error(strip_ansi_codes(f"Error removing original file: {str(e)}"))
                 final_path = temp_path
                 final_format = 'mp3'
             else:
@@ -191,13 +205,13 @@ def download_video(url, format_choice, quality, download_id):
             }
             return final_path, f"{base_filename}.{final_format}"
     except yt_dlp.utils.DownloadError as e:
-        error_msg = f"Download error: {str(e)}"
+        error_msg = f"Download error: {strip_ansi_codes(str(e))}"
         logger.error(error_msg)
         download_status[download_id] = f'error: {error_msg}'
         raise Exception(clean_error_message(str(e)))
     except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}")
-        download_status[download_id] = f'error: {str(e)}'
+        logger.error(strip_ansi_codes(f"Unexpected error: {str(e)}"))
+        download_status[download_id] = f'error: {strip_ansi_codes(str(e))}'
         for path in [original_path, temp_path]:
             if path and os.path.exists(path):
                 try:
@@ -207,7 +221,8 @@ def download_video(url, format_choice, quality, download_id):
         raise
 
 def clean_error_message(msg):
-    """Remove sensitive info from error messages"""
+    """Remove sensitive info and ANSI codes from error messages"""
+    msg = strip_ansi_codes(msg)
     patterns = [
         r"File (.*?) already exists",
         r"path: (.*?)$",
@@ -241,15 +256,15 @@ def start_download():
             try:
                 temp_path, filename = download_video(url, format_choice, quality, download_id)
             except Exception as e:
-                logger.error(f"Download task failed: {str(e)}")
+                logger.error(strip_ansi_codes(f"Download task failed: {str(e)}"))
         
         threading.Thread(target=download_task, daemon=True).start()
         
         return jsonify({'status': 'started', 'download_id': download_id})
             
     except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        logger.error(strip_ansi_codes(f"Unexpected error: {str(e)}"))
+        return jsonify({'status': 'error', 'message': strip_ansi_codes(str(e))}), 500
 
 @app.route('/download_status/<download_id>')
 def get_download_status(download_id):
@@ -260,26 +275,26 @@ def get_download_status(download_id):
     if isinstance(status, dict) and status.get('status') == 'ready':
         response_data = {
             'status': 'ready',
-            'filename': status['filename'],
-            'path': status['path'],
+            'filename': strip_ansi_codes(status['filename']),
+            'path': strip_ansi_codes(status['path']),
             'size': status['size'],
-            'format': status['format']
+            'format': strip_ansi_codes(status['format'])
         }
         if transcode_status:
-            response_data['transcode_status'] = transcode_status
+            response_data['transcode_status'] = strip_ansi_codes(transcode_status)
         return jsonify(response_data)
     elif isinstance(status, str) and status.startswith('error:'):
-        return jsonify({'status': 'error', 'message': status[6:]})
+        return jsonify({'status': 'error', 'message': strip_ansi_codes(status[6:])})
     else:
         response_data = {
             'status': 'progress',
-            'progress': progress.get('percent', '0%'),
-            'speed': progress.get('speed', '?'),
-            'eta': progress.get('eta', '?'),
-            'state': progress.get('status', 'starting')
+            'progress': strip_ansi_codes(progress.get('percent', '0%')),
+            'speed': strip_ansi_codes(progress.get('speed', '?')),
+            'eta': strip_ansi_codes(progress.get('eta', '?')),
+            'state': strip_ansi_codes(progress.get('status', 'starting'))
         }
         if transcode_status:
-            response_data['transcode_status'] = transcode_status
+            response_data['transcode_status'] = strip_ansi_codes(transcode_status)
         return jsonify(response_data)
 
 @app.route('/download_file/<download_id>')
@@ -292,7 +307,7 @@ def download_file(download_id):
     status = download_status[download_id]
     # Handle error status (string)
     if isinstance(status, str):
-        return jsonify({'status': 'error', 'message': status[6:] if status.startswith('error:') else status}), 400
+        return jsonify({'status': 'error', 'message': strip_ansi_codes(status[6:] if status.startswith('error:') else status)}), 400
     if not isinstance(status, dict):
         return jsonify({'status': 'error', 'message': 'Invalid download status'}), 400
     if status.get('status') != 'ready':
@@ -322,20 +337,20 @@ def download_file(download_id):
             # Clean up after streaming
             try:
                 os.remove(file_path)
-                logger.info(f"Cleaned up temp file: {file_path}")
+                logger.info(strip_ansi_codes(f"Cleaned up temp file: {file_path}"))
                 # Remove download status
                 if download_id in download_status:
                     del download_status[download_id]
                 if download_id in transcoding_status:
                     del transcoding_status[download_id]
             except Exception as e:
-                logger.error(f"Error cleaning up temp file: {str(e)}")
+                logger.error(strip_ansi_codes(f"Error cleaning up temp file: {str(e)}"))
     
     response = Response(
         file_generator(),
         mimetype=mimetype,
         headers={
-            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Content-Disposition': f'attachment; filename="{strip_ansi_codes(filename)}"',
             'Content-Length': str(size),
             'X-File-Size': str(size),
             'X-File-Size-MB': str(size_mb)
@@ -368,11 +383,11 @@ def cancel_download(download_id):
 def ratelimit_handler(e):
     return jsonify({
         'status': 'error', 
-        'message': 'Too many requests. Please try again later.',
+        'message': strip_ansi_codes('Too many requests. Please try again later.'),
         'limits': {
-            'default': DEFAULT_LIMIT,
-            'start_download': START_DOWNLOAD_LIMIT,
-            'download_file': API_DOWNLOAD_LIMIT
+            'default': strip_ansi_codes(DEFAULT_LIMIT),
+            'start_download': strip_ansi_codes(START_DOWNLOAD_LIMIT),
+            'download_file': strip_ansi_codes(API_DOWNLOAD_LIMIT)
         }
     }), 429
 
