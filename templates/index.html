@@ -1,0 +1,335 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto bg-white rounded-xl shadow-md overflow-hidden p-6">
+    <h1 class="text-3xl font-bold text-center text-red-600 mb-6">
+        <i class="fas fa-download mr-2"></i>Universal Video Downloader
+    </h1>
+    
+    <form id="downloadForm" class="space-y-4">
+        <div>
+            <label for="url" class="block text-sm font-medium text-gray-700 mb-1">Video URL</label>
+            <input type="text" id="url" name="url" required
+                   class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-red-500 focus:border-red-500"
+                   placeholder="https://example.com/video...">
+            <p class="mt-1 text-xs text-gray-500">Supports YouTube, Vimeo, Twitter, TikTok, and 1000+ sites</p>
+        </div>
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Format</label>
+                <div class="flex items-center space-x-6">
+                    <label class="inline-flex items-center">
+                        <input type="radio" id="format-mp4" name="format" value="mp4" class="form-radio text-red-600" checked>
+                        <span class="ml-2">MP4 (Video)</span>
+                    </label>
+                    <label class="inline-flex items-center">
+                        <input type="radio" id="format-mp3" name="format" value="mp3" class="form-radio text-red-600">
+                        <span class="ml-2">MP3 (Audio)</span>
+                    </label>
+                </div>
+            </div>
+        </div>
+        
+        <button type="submit" id="downloadBtn"
+                class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-4 rounded-md transition duration-200 flex items-center justify-center">
+            <i class="fas fa-download mr-2"></i> Download
+        </button>
+    </form>
+    
+    <div id="progressContainer" class="mt-4 hidden">
+        <div class="mb-2 flex justify-between text-sm">
+            <span id="progressStatus">Starting download...</span>
+            <span id="progressPercent">0%</span>
+        </div>
+        <div class="w-full bg-gray-200 rounded-full h-2.5">
+            <div id="progressBar" class="progress-bar bg-red-600 h-2.5 rounded-full" style="width: 0%"></div>
+        </div>
+        <div class="mt-2 text-sm text-gray-600 flex justify-between">
+            <span>Speed: <span id="downloadSpeed">--</span></span>
+            <span>ETA: <span id="downloadEta">--</span></span>
+        </div>
+        <div id="transcodeStatus" class="mt-2 text-sm text-blue-600 hidden">
+            <i class="fas fa-sync-alt mr-1"></i> <span>Transcoding to target format...</span>
+        </div>
+        <div class="mt-4 text-center">
+            <button id="cancelBtn" class="text-red-600 hover:text-red-800">
+                <i class="fas fa-times-circle mr-1"></i> Cancel Download
+            </button>
+        </div>
+    </div>
+    
+    <div id="successMessage" class="mt-4 p-4 bg-green-100 text-green-700 rounded-lg hidden">
+        <p class="text-center"><i class="fas fa-check-circle mr-2"></i> Download complete! Your file should start downloading shortly.</p>
+        <div id="fileInfo" class="mt-2 text-center text-sm">
+            <p>Filename: <span id="fileName"></span></p>
+            <p>Size: <span id="fileSize"></span> MB</p>
+            <p>Format: <span id="fileFormat"></span></p>
+        </div>
+    </div>
+    
+    <div id="errorMessage" class="mt-4 p-4 bg-red-100 text-red-700 rounded-lg hidden">
+        <p class="text-center"><i class="fas fa-exclamation-triangle mr-2"></i> <span id="errorText"></span></p>
+        <div class="mt-2 text-center">
+            <button id="retryBtn" class="text-red-700 hover:text-red-900 underline">
+                <i class="fas fa-redo mr-1"></i> Try Again
+            </button>
+        </div>
+    </div>
+    
+    <div class="mt-6 text-center text-sm text-gray-500">
+        <p><i class="fas fa-info-circle mr-1"></i> Some sites may restrict downloading of their content.</p>
+        <p class="mt-1"><i class="fas fa-shield-alt mr-1"></i> All downloads are processed securely and deleted immediately after transfer.</p>
+        <p class="mt-1"><i class="fas fa-history mr-1"></i> Transcoding may take additional time depending on file size.</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Remove formatSelect, use radio buttons
+    const downloadForm = document.getElementById('downloadForm');
+    const progressContainer = document.getElementById('progressContainer');
+    const progressBar = document.getElementById('progressBar');
+    const progressPercent = document.getElementById('progressPercent');
+    const progressStatus = document.getElementById('progressStatus');
+    const downloadSpeed = document.getElementById('downloadSpeed');
+    const downloadEta = document.getElementById('downloadEta');
+    const transcodeStatus = document.getElementById('transcodeStatus');
+    const cancelBtn = document.getElementById('cancelBtn');
+    const successMessage = document.getElementById('successMessage');
+    const fileName = document.getElementById('fileName');
+    const fileSize = document.getElementById('fileSize');
+    const fileFormat = document.getElementById('fileFormat');
+    const errorMessage = document.getElementById('errorMessage');
+    const errorText = document.getElementById('errorText');
+    const retryBtn = document.getElementById('retryBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    
+    let downloadId = null;
+    let statusInterval = null;
+    let originalBtnText = downloadBtn.innerHTML;
+    
+    // Handle form submission
+    downloadForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        resetMessages();
+        startDownload();
+    });
+    
+    // Reset error/success messages
+    function resetMessages() {
+        successMessage.classList.add('hidden');
+        errorMessage.classList.add('hidden');
+        transcodeStatus.classList.add('hidden');
+    }
+    
+    // Start download process
+    function startDownload() {
+        const url = document.getElementById('url').value;
+        const format = document.querySelector('input[name="format"]:checked').value;
+        
+        if (!url) {
+            showError('Please enter a valid URL');
+            return;
+        }
+        
+        // Validate URL format
+        if (!isValidUrl(url)) {
+            showError('Please enter a properly formatted URL (e.g., https://...)');
+            return;
+        }
+        
+        // Show loading state
+        downloadBtn.disabled = true;
+        downloadBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Starting...';
+        
+        // Hide previous messages
+        successMessage.classList.add('hidden');
+        errorMessage.classList.add('hidden');
+        
+        // Start download process
+        fetch('/start_download', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                url: url,
+                format: format
+            })
+        })
+        .then(response => {
+            if (!response.ok) {
+                return response.json().then(err => { throw new Error(err.message || 'Failed to start download') });
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.status === 'started') {
+                downloadId = data.download_id;
+                showProgress();
+            } else {
+                throw new Error(data.message || 'Failed to start download');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            showError(`Error: ${error.message}`);
+            resetUI();
+        });
+    }
+    
+    // Validate URL format
+    function isValidUrl(url) {
+        try {
+            new URL(url);
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+    
+    // Show download progress
+    function showProgress() {
+        // Hide form, show progress
+        downloadForm.classList.add('hidden');
+        progressContainer.classList.remove('hidden');
+        
+        // Start checking status
+        statusInterval = setInterval(checkStatus, 1500);
+    }
+    
+    // Check download status
+    function checkStatus() {
+        if (!downloadId) return;
+        
+        fetch(`/download_status/${downloadId}`)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Failed to check status');
+            }
+            return response.json();
+        })
+        .then(data => {
+            // Show transcoding status if available
+            if (data.transcode_status) {
+                transcodeStatus.classList.remove('hidden');
+            }
+            
+            if (data.status === 'progress') {
+                // Update progress UI
+                let percent = data.progress || '0%';
+                let percentValue = parseInt(percent) || 0;
+                
+                // Handle "NA%" case
+                if (percent === 'NA%') {
+                    percent = '0%';
+                    percentValue = 0;
+                    progressStatus.textContent = 'Processing...';
+                } else {
+                    progressStatus.textContent = data.state === 'processing' 
+                        ? 'Processing video...' 
+                        : 'Downloading...';
+                }
+                
+                progressBar.style.width = percentValue + '%';
+                progressPercent.textContent = percent;
+                downloadSpeed.textContent = data.speed || '--';
+                downloadEta.textContent = data.eta || '--';
+            } 
+            else if (data.status === 'ready') {
+                // Download complete, trigger file download
+                clearInterval(statusInterval);
+                progressStatus.textContent = 'Download complete!';
+                progressBar.style.width = '100%';
+                progressPercent.textContent = '100%';
+                
+                // Show file info
+                fileName.textContent = data.filename;
+                const sizeMB = (data.size / (1024 * 1024)).toFixed(1);
+                fileSize.textContent = sizeMB;
+                fileFormat.textContent = data.format;
+                
+                // Show success message
+                successMessage.classList.remove('hidden');
+                
+                // Trigger file download after short delay
+                setTimeout(() => {
+                    window.location.href = `/download_file/${downloadId}`;
+                    resetUI();
+                }, 1500);
+            }
+            else if (data.status === 'error') {
+                clearInterval(statusInterval);
+                showError(`Download failed: ${data.message || 'Unknown error'}`);
+                resetUI();
+            }
+        })
+        .catch(error => {
+            console.error('Status check error:', error);
+            clearInterval(statusInterval);
+            showError('Error checking download status');
+            resetUI();
+        });
+    }
+    
+    // Show error message
+    function showError(message) {
+        errorText.textContent = message;
+        errorMessage.classList.remove('hidden');
+    }
+    
+    // Cancel download
+    cancelBtn.addEventListener('click', function() {
+        if (downloadId) {
+            fetch(`/cancel_download/${downloadId}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'canceled') {
+                    showError('Download canceled');
+                }
+                resetUI();
+            })
+            .catch(error => {
+                console.error('Cancel error:', error);
+                showError('Error canceling download');
+                resetUI();
+            });
+        } else {
+            resetUI();
+        }
+    });
+    
+    // Retry button
+    retryBtn.addEventListener('click', function() {
+        resetMessages();
+        resetUI();
+    });
+    
+    // Reset UI to initial state
+    function resetUI() {
+        clearInterval(statusInterval);
+        downloadId = null;
+        
+        // Reset buttons
+        downloadBtn.disabled = false;
+        downloadBtn.innerHTML = originalBtnText;
+        
+        // Reset progress
+        progressBar.style.width = '0%';
+        progressPercent.textContent = '0%';
+        progressStatus.textContent = 'Starting download...';
+        downloadSpeed.textContent = '--';
+        downloadEta.textContent = '--';
+        transcodeStatus.classList.add('hidden');
+        
+        // Show form, hide progress
+        progressContainer.classList.add('hidden');
+        downloadForm.classList.remove('hidden');
+        successMessage.classList.add('hidden');
+    }
+});
+</script>
+{% endblock %}

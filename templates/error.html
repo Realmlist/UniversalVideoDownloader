@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-md mx-auto bg-white rounded-xl shadow-md overflow-hidden p-6 text-center">
+    <div class="text-red-500 text-6xl mb-4">
+        <i class="fas fa-exclamation-circle"></i>
+    </div>
+    <h2 class="text-2xl font-bold mb-4">Download Failed</h2>
+    <p class="mb-6">{{ error }}</p>
+    <a href="{{ url_for('index') }}" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">
+        <i class="fas fa-arrow-left mr-2"></i> Try Again
+    </a>
+</div>
+{% endblock %}
